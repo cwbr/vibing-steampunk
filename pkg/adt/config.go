@@ -49,6 +49,22 @@ type Config struct {
 	Features FeatureConfig
 	// TerminalID for debugger session (shared with SAP GUI for cross-tool debugging)
 	TerminalID string
+
+	// RFC connection settings (alternative to HTTP/BaseURL)
+	ConnectionMode   string // "http" (default) or "rfc"
+	AsHost           string // Direct app server hostname
+	SysNr            string // System number (e.g., "00")
+	MsHost           string // Message server host (load balancing)
+	MsServ           string // Message server service/port
+	R3Name           string // SAP system name
+	Group            string // Logon group
+
+	// JCo sidecar settings
+	JcoProxyJar      string // Path to jco-proxy JAR
+	JcoLibsDir       string // Path to JCo libraries directory
+	JavaPath         string // Path to java binary (default: "java")
+	RfcProxyPort     int    // Fixed sidecar port (0 = auto-assign)
+	RfcMaxConcurrent int    // Max concurrent RFC calls (default: 5)
 }
 
 // Option is a functional option for configuring the ADT client.
@@ -211,6 +227,95 @@ func WithFeatures(features FeatureConfig) Option {
 func WithTerminalID(terminalID string) Option {
 	return func(c *Config) {
 		c.TerminalID = terminalID
+	}
+}
+
+// IsRfcMode returns true if the connection mode is RFC.
+func (c *Config) IsRfcMode() bool {
+	return strings.EqualFold(c.ConnectionMode, "rfc")
+}
+
+// WithConnectionMode sets the connection mode ("http" or "rfc").
+func WithConnectionMode(mode string) Option {
+	return func(c *Config) {
+		c.ConnectionMode = mode
+	}
+}
+
+// WithAsHost sets the SAP application server hostname for direct RFC connection.
+func WithAsHost(host string) Option {
+	return func(c *Config) {
+		c.AsHost = host
+	}
+}
+
+// WithSysNr sets the SAP system number for direct RFC connection.
+func WithSysNr(nr string) Option {
+	return func(c *Config) {
+		c.SysNr = nr
+	}
+}
+
+// WithMsHost sets the message server host for load-balanced RFC connection.
+func WithMsHost(host string) Option {
+	return func(c *Config) {
+		c.MsHost = host
+	}
+}
+
+// WithMsServ sets the message server service/port for load-balanced RFC connection.
+func WithMsServ(serv string) Option {
+	return func(c *Config) {
+		c.MsServ = serv
+	}
+}
+
+// WithR3Name sets the SAP system name for load-balanced RFC connection.
+func WithR3Name(name string) Option {
+	return func(c *Config) {
+		c.R3Name = name
+	}
+}
+
+// WithGroup sets the logon group for load-balanced RFC connection.
+func WithGroup(group string) Option {
+	return func(c *Config) {
+		c.Group = group
+	}
+}
+
+// WithJcoProxyJar sets the path to the JCo proxy JAR file.
+func WithJcoProxyJar(path string) Option {
+	return func(c *Config) {
+		c.JcoProxyJar = path
+	}
+}
+
+// WithJcoLibsDir sets the path to the JCo libraries directory.
+func WithJcoLibsDir(dir string) Option {
+	return func(c *Config) {
+		c.JcoLibsDir = dir
+	}
+}
+
+// WithJavaPath sets the path to the Java binary.
+func WithJavaPath(path string) Option {
+	return func(c *Config) {
+		c.JavaPath = path
+	}
+}
+
+// WithRfcProxyPort sets a fixed port for the JCo sidecar (0 = auto-assign).
+func WithRfcProxyPort(port int) Option {
+	return func(c *Config) {
+		c.RfcProxyPort = port
+	}
+}
+
+// WithRfcMaxConcurrent sets the maximum number of concurrent RFC calls.
+func WithRfcMaxConcurrent(n int) Option {
+	return func(c *Config) {
+		c.RfcMaxConcurrent = n
 	}
 }
 
