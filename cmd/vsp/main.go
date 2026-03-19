@@ -2,9 +2,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/oisee/vibing-steampunk/internal/mcp"
@@ -93,6 +95,12 @@ func init() {
 	rootCmd.Flags().String("cookie-file", "", "Path to cookie file in Netscape format")
 	rootCmd.Flags().String("cookie-string", "", "Cookie string (key1=val1; key2=val2)")
 
+	// Browser-based SSO authentication
+	rootCmd.Flags().Bool("browser-auth", false, "Open browser for SSO login (Kerberos, SAML, Keycloak)")
+	rootCmd.Flags().Duration("browser-auth-timeout", 120*time.Second, "Timeout for browser-based SSO login")
+	rootCmd.Flags().String("browser-exec", "", "Path to Chromium-based browser (default: auto-detect Edge, Chrome, Chromium)")
+	rootCmd.Flags().String("cookie-save", "", "Save browser auth cookies to file for reuse with --cookie-file")
+
 	// Safety options
 	rootCmd.Flags().BoolVar(&cfg.ReadOnly, "read-only", false, "Block all write operations (create, update, delete, activate)")
 	rootCmd.Flags().BoolVar(&cfg.BlockFreeSQL, "block-free-sql", false, "Block execution of arbitrary SQL queries via RunQuery")
@@ -132,6 +140,10 @@ func init() {
 	viper.BindPFlag("insecure", rootCmd.Flags().Lookup("insecure"))
 	viper.BindPFlag("cookie-file", rootCmd.Flags().Lookup("cookie-file"))
 	viper.BindPFlag("cookie-string", rootCmd.Flags().Lookup("cookie-string"))
+	viper.BindPFlag("browser-auth", rootCmd.Flags().Lookup("browser-auth"))
+	viper.BindPFlag("browser-auth-timeout", rootCmd.Flags().Lookup("browser-auth-timeout"))
+	viper.BindPFlag("browser-exec", rootCmd.Flags().Lookup("browser-exec"))
+	viper.BindPFlag("cookie-save", rootCmd.Flags().Lookup("cookie-save"))
 	viper.BindPFlag("read-only", rootCmd.Flags().Lookup("read-only"))
 	viper.BindPFlag("block-free-sql", rootCmd.Flags().Lookup("block-free-sql"))
 	viper.BindPFlag("allowed-ops", rootCmd.Flags().Lookup("allowed-ops"))
@@ -168,6 +180,11 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 	// Validate configuration
 	if err := validateConfig(); err != nil {
+		return err
+	}
+
+	// Browser-based SSO authentication (must run before processCookieAuth)
+	if err := processBrowserAuth(cmd); err != nil {
 		return err
 	}
 
@@ -253,7 +270,9 @@ func resolveConfig(cmd *cobra.Command) {
 	// Cookie auth takes precedence over basic auth since it's more explicit
 	cookieAuthViaCLI := cmd.Flags().Changed("cookie-file") || cmd.Flags().Changed("cookie-string")
 	cookieAuthViaEnv := viper.GetString("COOKIE_FILE") != "" || viper.GetString("COOKIE_STRING") != ""
-	hasCookieAuth := cookieAuthViaCLI || cookieAuthViaEnv
+	browserAuth, _ := cmd.Flags().GetBool("browser-auth")
+	hasBrowserAuth := browserAuth || viper.GetBool("BROWSER_AUTH")
+	hasCookieAuth := cookieAuthViaCLI || cookieAuthViaEnv || hasBrowserAuth
 
 	// URL: flag > SAP_URL env
 	if cfg.BaseURL == "" {
@@ -407,6 +426,56 @@ func validateConfig() error {
 	return nil
 }
 
+func processBrowserAuth(cmd *cobra.Command) error {
+	browserAuth, _ := cmd.Flags().GetBool("browser-auth")
+	if !browserAuth && !viper.GetBool("BROWSER_AUTH") {
+		return nil
+	}
+
+	if cfg.BaseURL == "" {
+		return fmt.Errorf("--browser-auth requires --url to be set")
+	}
+
+	// Determine timeout
+	timeout, _ := cmd.Flags().GetDuration("browser-auth-timeout")
+	if !cmd.Flags().Changed("browser-auth-timeout") {
+		if v := viper.GetString("BROWSER_AUTH_TIMEOUT"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				timeout = d
+			}
+		}
+	}
+
+	// Determine browser executable
+	browserExec, _ := cmd.Flags().GetString("browser-exec")
+	if browserExec == "" {
+		browserExec = viper.GetString("BROWSER_EXEC")
+	}
+
+	ctx := context.Background()
+	cookies, err := adt.BrowserLogin(ctx, cfg.BaseURL, cfg.InsecureSkipVerify, timeout, browserExec, cfg.Verbose)
+	if err != nil {
+		return fmt.Errorf("browser authentication failed: %w", err)
+	}
+
+	cfg.Cookies = cookies
+
+	// Save cookies to file if requested
+	cookieSave, _ := cmd.Flags().GetString("cookie-save")
+	if cookieSave == "" {
+		cookieSave = viper.GetString("COOKIE_SAVE")
+	}
+	if cookieSave != "" {
+		if err := adt.SaveCookiesToFile(cookies, cfg.BaseURL, cookieSave); err != nil {
+			fmt.Fprintf(os.Stderr, "[BROWSER-AUTH] Warning: failed to save cookies: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "[BROWSER-AUTH] Cookies saved to %s (reuse with --cookie-file)\n", cookieSave)
+		}
+	}
+
+	return nil
+}
+
 func processCookieAuth(cmd *cobra.Command) error {
 	cookieFile, _ := cmd.Flags().GetString("cookie-file")
 	cookieString, _ := cmd.Flags().GetString("cookie-string")
@@ -430,13 +499,22 @@ func processCookieAuth(cmd *cobra.Command) error {
 	if cookieString != "" {
 		authMethods++
 	}
+	// Browser auth already populated cfg.Cookies in processBrowserAuth
+	if len(cfg.Cookies) > 0 {
+		authMethods++
+	}
 
 	if authMethods > 1 {
-		return fmt.Errorf("only one authentication method can be used at a time (basic auth, cookie-file, or cookie-string)")
+		return fmt.Errorf("only one authentication method can be used at a time (basic auth, cookie-file, cookie-string, or browser-auth)")
 	}
 
 	if authMethods == 0 {
-		return fmt.Errorf("authentication required. Use --user/--password, --cookie-file, or --cookie-string")
+		return fmt.Errorf("authentication required. Use --user/--password, --cookie-file, --cookie-string, or --browser-auth")
+	}
+
+	// If cookies already set by browser auth, we're done
+	if len(cfg.Cookies) > 0 {
+		return nil
 	}
 
 	// Process cookie file
