@@ -19,6 +19,7 @@ import (
 var sapAuthCookieNames = []string{
 	"MYSAPSSO2",
 	"SAP_SESSIONID",
+	"JSESSIONID",
 }
 
 // sapWeakCookieNames are set before/during authentication and are not sufficient alone.
