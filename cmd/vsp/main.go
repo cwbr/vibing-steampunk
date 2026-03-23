@@ -650,11 +650,14 @@ func processCookieAuth(cmd *cobra.Command) error {
 		authMethods++
 	}
 
+	// In RFC mode, SSO is valid — no password or cookies needed
+	isRFC := strings.EqualFold(cfg.ConnectionMode, "rfc")
+
 	if authMethods > 1 {
 		return fmt.Errorf("only one authentication method can be used at a time (basic auth, cookie-file, or cookie-string)")
 	}
 
-	if authMethods == 0 {
+	if authMethods == 0 && !isRFC {
 		return fmt.Errorf("authentication required. Use --user/--password, --cookie-file, or --cookie-string")
 	}
 

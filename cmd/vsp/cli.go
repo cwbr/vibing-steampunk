@@ -76,9 +76,10 @@ func resolveSystemParams(cmd *cobra.Command) (*systemParams, error) {
 			return nil, err
 		}
 
-		// Require either password or cookie auth
+		// Require either password or cookie auth (RFC mode supports SSO without password)
 		hasCookieAuth := sys.CookieFile != "" || sys.CookieString != ""
-		if sys.Password == "" && !hasCookieAuth {
+		isRFC := strings.EqualFold(sys.ConnectionMode, "rfc")
+		if sys.Password == "" && !hasCookieAuth && !isRFC {
 			return nil, fmt.Errorf("auth not found for system '%s'. Set VSP_%s_PASSWORD env var or use cookie_file/cookie_string", systemName, strings.ToUpper(systemName))
 		}
 
@@ -112,13 +113,15 @@ func resolveSystemParams(cmd *cobra.Command) (*systemParams, error) {
 
 	// Fall back to environment variables
 	url := os.Getenv("SAP_URL")
-	if url == "" {
+	connMode := os.Getenv("SAP_CONNECTION_MODE")
+	if url == "" && !strings.EqualFold(connMode, "rfc") {
 		return nil, fmt.Errorf("SAP_URL not set. Use --system flag or set SAP_* env vars")
 	}
 
 	user := os.Getenv("SAP_USER")
 	password := os.Getenv("SAP_PASSWORD")
-	if user == "" || password == "" {
+	// RFC mode supports SSO — password is optional
+	if !strings.EqualFold(connMode, "rfc") && (user == "" || password == "") {
 		return nil, fmt.Errorf("SAP_USER and SAP_PASSWORD required")
 	}
 
