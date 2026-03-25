@@ -50,24 +50,39 @@ public class RfcProxyServer {
         logger.info("Starting RFC Proxy Server...");
 
         try {
+            boolean stdioMode = hasFlag(args, "--stdio");
             int port = parsePort(args);
             ConnectionConfig config = buildConfig(args);
             config.validate();
 
             logger.info("Configuration: {}", config);
+            logger.info("Transport: {}", stdioMode ? "STDIO" : "HTTP");
 
-            RfcProxyServer server = new RfcProxyServer(port, config);
-            server.start();
+            if (stdioMode) {
+                // STDIO mode: read JSON from stdin, write to stdout
+                JCoConnectionManager connectionManager = new JCoConnectionManager(config);
+                connectionManager.initialize();
 
-            // Register shutdown hook
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                logger.info("Shutdown signal received");
-                server.stop();
-            }));
+                StdioTransport transport = new StdioTransport(connectionManager);
 
+                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                    logger.info("Shutdown signal received");
+                    transport.shutdown();
+                }));
+
+                transport.run();
+            } else {
+                // HTTP mode: start Javalin HTTP server (default)
+                RfcProxyServer server = new RfcProxyServer(port, config);
+                server.start();
+
+                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                    logger.info("Shutdown signal received");
+                    server.stop();
+                }));
+            }
         } catch (Exception e) {
             logger.error("Failed to start server: {}", e.getMessage(), e);
-            // Also print to stderr so the Go sidecar manager can capture the error
             System.err.println("SIDECAR_ERROR: " + e.getMessage());
             System.exit(1);
         }
@@ -393,6 +408,18 @@ public class RfcProxyServer {
             ctx.status(500);
             ctx.json(ProxyResponse.error(500, "Error terminating sessions: " + e.getMessage()));
         }
+    }
+
+    /**
+     * Check if a boolean flag is present in command-line arguments.
+     */
+    private static boolean hasFlag(String[] args, String flag) {
+        for (String arg : args) {
+            if (flag.equals(arg)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
