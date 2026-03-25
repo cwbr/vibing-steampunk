@@ -341,11 +341,21 @@ func (s *SidecarManager) buildArgs(classpath string) []string {
 	}
 
 	// If JcoProperties is populated (e.g., SNC/SSO mode), pass all connection
-	// parameters as --jco.<property> <value> arguments. The Java sidecar
-	// collects these and uses them directly as JCo destination properties.
+	// parameters as --<property> <value> arguments (keys already have jco.client.* prefix).
+	// The Java sidecar collects these and uses them directly as JCo destination properties.
+	// Also pass --user, --client, --lang as named args so Java can inject them if needed.
 	if len(s.config.JcoProperties) > 0 {
 		for k, v := range s.config.JcoProperties {
-			args = append(args, "--jco."+k, v)
+			args = append(args, "--"+k, v)
+		}
+		if s.config.Username != "" {
+			args = append(args, "--user", s.config.Username)
+		}
+		if s.config.Client != "" {
+			args = append(args, "--client", s.config.Client)
+		}
+		if s.config.Language != "" {
+			args = append(args, "--lang", s.config.Language)
 		}
 		return args
 	}
