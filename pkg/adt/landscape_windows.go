@@ -3,6 +3,10 @@
 package adt
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
+
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -127,4 +131,74 @@ func readLandscapeConfigPath() string {
 	}
 
 	return ""
+}
+
+// sncLibraryScanDirs returns well-known Windows directories where SAP SNC
+// libraries (sapcrypto.dll / sncgss64.dll) are typically installed.
+// Uses ProgramFiles / ProgramFiles(x86) environment variables to handle
+// both 64-bit and 32-bit installations.
+func sncLibraryScanDirs() []string {
+	var dirs []string
+
+	// Determine program files directories
+	var programFiles, programFilesX86 string
+	if runtime.GOARCH == "amd64" {
+		programFiles = os.Getenv("ProgramFiles")         // C:\Program Files
+		programFilesX86 = os.Getenv("ProgramFiles(x86)") // C:\Program Files (x86)
+	} else {
+		programFiles = os.Getenv("ProgramFiles") // On 32-bit this is the x86 path
+	}
+
+	// SAP Secure Login Client (most common for SNC/SSO)
+	if programFiles != "" {
+		dirs = append(dirs,
+			filepath.Join(programFiles, "SAP", "FrontEnd", "SecureLogin", "lib"),
+			filepath.Join(programFiles, "SAP", "FrontEnd", "SecureLogin"),
+		)
+	}
+	if programFilesX86 != "" {
+		dirs = append(dirs,
+			filepath.Join(programFilesX86, "SAP", "FrontEnd", "SecureLogin", "lib"),
+			filepath.Join(programFilesX86, "SAP", "FrontEnd", "SecureLogin"),
+		)
+	}
+
+	// SAP CommonCryptoLib (standalone installation)
+	if programFiles != "" {
+		dirs = append(dirs,
+			filepath.Join(programFiles, "SAP", "CommonCryptoLib"),
+		)
+	}
+	if programFilesX86 != "" {
+		dirs = append(dirs,
+			filepath.Join(programFilesX86, "SAP", "CommonCryptoLib"),
+		)
+	}
+
+	// SAP GUI installation
+	if programFiles != "" {
+		dirs = append(dirs,
+			filepath.Join(programFiles, "SAP", "FrontEnd", "SAPgui"),
+		)
+	}
+	if programFilesX86 != "" {
+		dirs = append(dirs,
+			filepath.Join(programFilesX86, "SAP", "FrontEnd", "SAPgui"),
+		)
+	}
+
+	// System32 / SysWOW64
+	systemRoot := os.Getenv("SystemRoot")
+	if systemRoot != "" {
+		dirs = append(dirs,
+			filepath.Join(systemRoot, "System32"),
+		)
+		if runtime.GOARCH == "amd64" {
+			dirs = append(dirs,
+				filepath.Join(systemRoot, "SysWOW64"),
+			)
+		}
+	}
+
+	return dirs
 }

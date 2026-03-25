@@ -8,3 +8,16 @@ package adt
 func findLandscapeFilesFromRegistry() []string {
 	return nil
 }
+
+// sncLibraryScanDirs returns well-known directories where SAP SNC libraries
+// are typically installed on Linux and macOS.
+func sncLibraryScanDirs() []string {
+	return []string{
+		"/usr/sap/snc/lib",
+		"/usr/local/sap/snc/lib",
+		"/opt/sap/snc/lib",
+		"/usr/sap/sec",
+		"/usr/local/sap/sec",
+		"/opt/sap/sec",
+	}
+}

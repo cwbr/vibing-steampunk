@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -435,6 +436,14 @@ func ResolveSNCJcoProperties(sysID, landscapeFile, defaultClient, defaultLanguag
 		props["jco.client.snc_qop"] = strconv.Itoa(svc.SNCOp)
 	}
 
+	// SNC library: locate the cryptographic library on the system.
+	// Eclipse and other IDEs may not inherit the full system PATH, causing
+	// JCo to fail with "Unable to load GSS-API DLL". Providing the absolute
+	// path via snc_lib ensures it works regardless of the parent process.
+	if sncLib := findSNCLibrary(); sncLib != "" {
+		props["jco.client.snc_lib"] = sncLib
+	}
+
 	// Connection parameters based on connection mode
 	switch svc.Mode {
 	case 0: // Load balanced — use message server
@@ -498,6 +507,67 @@ func ResolveSNCJcoProperties(sysID, landscapeFile, defaultClient, defaultLanguag
 	}
 
 	return props, nil
+}
+
+// findSNCLibrary attempts to locate the SNC cryptographic library on the system.
+// Eclipse and other IDEs may not inherit the system PATH, so the JCo sidecar
+// may fail to load the SNC library. This function finds the absolute path
+// so it can be passed as jco.client.snc_lib.
+//
+// Search strategy:
+//  1. Check if the library is already on PATH (exec.LookPath)
+//  2. Scan well-known SAP installation directories
+//
+// Returns the absolute path to the library, or "" if not found.
+func findSNCLibrary() string {
+	// Determine library names based on OS and architecture
+	names := sncLibraryNames()
+	if len(names) == 0 {
+		return ""
+	}
+
+	// 1. Check if the library is on PATH
+	for _, name := range names {
+		if path, err := exec.LookPath(name); err == nil {
+			if absPath, err := filepath.Abs(path); err == nil {
+				return absPath
+			}
+			return path
+		}
+	}
+
+	// 2. Scan well-known SAP installation directories
+	for _, dir := range sncLibraryScanDirs() {
+		for _, name := range names {
+			candidate := filepath.Join(dir, name)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+
+	return ""
+}
+
+// sncLibraryNames returns the SNC library filenames to look for,
+// ordered by preference. Platform-specific.
+func sncLibraryNames() []string {
+	switch runtime.GOOS {
+	case "windows":
+		if runtime.GOARCH == "amd64" {
+			return []string{"sapcrypto.dll", "sncgss64.dll"}
+		}
+		return []string{"sapcrypto.dll", "sncgss32.dll"}
+	case "linux":
+		if runtime.GOARCH == "amd64" {
+			return []string{"libsapcrypto.so", "libsncgss64.so"}
+		}
+		return []string{"libsapcrypto.so", "libsncgss.so"}
+	case "darwin":
+		return []string{"libsapcrypto.dylib"}
+	default:
+		return nil
+	}
 }
 
 // parseLandscapeServerAddress parses a SAP GUI server address "host:port".
