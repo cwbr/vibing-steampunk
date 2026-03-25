@@ -422,15 +422,21 @@ public class RfcProxyServer {
 
     /**
      * Build configuration from environment and command-line args.
+     *
+     * If --jco.* parameters are present, environment variables are ignored
+     * and all connection configuration comes exclusively from the JCo properties.
      */
     private static ConnectionConfig buildConfig(String[] args) {
-        // Start with environment config
-        ConnectionConfig envConfig = ConnectionConfig.fromEnvironment();
-
-        // Overlay command-line args
+        // Parse command-line args first to detect JCo properties mode
         ConnectionConfig argsConfig = ConnectionConfig.fromArgs(args);
 
-        // Merge (args take precedence)
+        // In JCo properties mode, skip environment — properties are self-contained
+        if (argsConfig.isJcoPropertiesMode()) {
+            return argsConfig;
+        }
+
+        // Standard mode: start with environment config, overlay CLI args
+        ConnectionConfig envConfig = ConnectionConfig.fromEnvironment();
         return ConnectionConfig.merge(envConfig, argsConfig);
     }
 }

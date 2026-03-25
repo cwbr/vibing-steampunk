@@ -34,7 +34,10 @@ public class JCoConnectionManager implements DestinationDataProvider {
      * Registers this as destination provider and tests connectivity.
      */
     public synchronized void initialize() throws JCoException {
-        if (config.isDirectConnection()) {
+        if (config.isJcoPropertiesMode()) {
+            logger.info("Initializing JCo connection (JCo properties mode, {} properties)",
+                config.getJcoProperties().size());
+        } else if (config.isDirectConnection()) {
             logger.info("Initializing JCo connection (direct) to {}:{}", config.getAsHost(), config.getSysnr());
         } else {
             logger.info("Initializing JCo connection (load balancing) to {} ({})", config.getR3Name(), config.getMsHost());
@@ -58,7 +61,9 @@ public class JCoConnectionManager implements DestinationDataProvider {
         // Test connection with ping
         logger.info("Testing connection...");
         destination.ping();
-        if (config.isDirectConnection()) {
+        if (config.isJcoPropertiesMode()) {
+            logger.info("JCo connection established successfully (properties mode)");
+        } else if (config.isDirectConnection()) {
             logger.info("JCo connection established successfully to {}:{}", config.getAsHost(), config.getSysnr());
         } else {
             logger.info("JCo connection established successfully to {}", config.getR3Name());
@@ -114,6 +119,24 @@ public class JCoConnectionManager implements DestinationDataProvider {
     public Properties getDestinationProperties(String destinationName) {
         if (!DESTINATION_NAME.equals(destinationName)) {
             return null;
+        }
+
+        // JCo properties mode: use raw properties directly from CLI arguments.
+        // These contain the complete JCo configuration (connection, SNC, pool, etc.)
+        // as resolved by the Go parent process from the SAP UI Landscape file.
+        if (config.isJcoPropertiesMode()) {
+            Properties props = config.toJcoDestinationProperties();
+
+            // Ensure pool settings are present (add defaults if not specified)
+            if (!props.containsKey(DestinationDataProvider.JCO_POOL_CAPACITY)) {
+                props.setProperty(DestinationDataProvider.JCO_POOL_CAPACITY, "5");
+            }
+            if (!props.containsKey(DestinationDataProvider.JCO_PEAK_LIMIT)) {
+                props.setProperty(DestinationDataProvider.JCO_PEAK_LIMIT, "10");
+            }
+
+            logger.debug("Providing destination properties (JCo properties mode, {} properties)", props.size());
+            return props;
         }
 
         Properties props = new Properties();
