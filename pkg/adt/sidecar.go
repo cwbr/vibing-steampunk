@@ -36,6 +36,12 @@ type SidecarConfig struct {
 	Username string // SAP username
 	Password string // SAP password
 	Language string // SAP language
+
+	// JcoProperties holds arbitrary JCo destination properties.
+	// When populated (e.g., for SNC/SSO), these are passed to the sidecar
+	// as --jco.<property> <value> command-line arguments instead of the
+	// individual named connection parameters above.
+	JcoProperties map[string]string
 }
 
 // Validate checks that required fields are present.
@@ -329,10 +335,22 @@ func (s *SidecarManager) buildArgs(classpath string) []string {
 		"com.sap.mcp.proxy.RfcProxyServer",
 	}
 
-	// Connection parameters
+	// Sidecar server port (always passed as named arg, not a JCo property)
 	if s.config.Port > 0 {
 		args = append(args, "--port", strconv.Itoa(s.config.Port))
 	}
+
+	// If JcoProperties is populated (e.g., SNC/SSO mode), pass all connection
+	// parameters as --jco.<property> <value> arguments. The Java sidecar
+	// collects these and uses them directly as JCo destination properties.
+	if len(s.config.JcoProperties) > 0 {
+		for k, v := range s.config.JcoProperties {
+			args = append(args, "--jco."+k, v)
+		}
+		return args
+	}
+
+	// Standard named connection parameters (backward-compatible)
 	if s.config.AsHost != "" {
 		args = append(args, "--ashost", s.config.AsHost)
 	}

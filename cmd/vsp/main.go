@@ -134,6 +134,11 @@ func init() {
 	rootCmd.Flags().IntVar(&cfg.RfcProxyPort, "rfc-proxy-port", 0, "Fixed sidecar port (0=auto)")
 	rootCmd.Flags().IntVar(&cfg.RfcMaxConcurrent, "rfc-max-concurrent", 5, "Max concurrent RFC calls")
 
+	// SNC/SSO configuration (via SAP UI Landscape)
+	rootCmd.Flags().BoolVar(&cfg.SNC, "snc", false, "Enable SNC single sign-on via JCo (requires --sysid)")
+	rootCmd.Flags().StringVar(&cfg.SysID, "sysid", "", "SAP System ID for SNC logon (3-char SID, reads connection from SAP UI Landscape)")
+	rootCmd.Flags().StringVar(&cfg.LandscapeFile, "landscape-file", "", "Path to SAP UI Landscape XML (auto-discovered if not set)")
+
 	// Output options
 	rootCmd.Flags().BoolVarP(&cfg.Verbose, "verbose", "v", false, "Enable verbose output to stderr")
 
@@ -184,6 +189,11 @@ func init() {
 	viper.BindPFlag("rfc-proxy-port", rootCmd.Flags().Lookup("rfc-proxy-port"))
 	viper.BindPFlag("rfc-max-concurrent", rootCmd.Flags().Lookup("rfc-max-concurrent"))
 
+	// SNC/SSO configuration
+	viper.BindPFlag("snc", rootCmd.Flags().Lookup("snc"))
+	viper.BindPFlag("sysid", rootCmd.Flags().Lookup("sysid"))
+	viper.BindPFlag("landscape-file", rootCmd.Flags().Lookup("landscape-file"))
+
 	// Set up environment variable mapping
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
@@ -193,6 +203,35 @@ func init() {
 func runServer(cmd *cobra.Command, args []string) error {
 	// Resolve configuration with priority: flags > env vars > defaults
 	resolveConfig(cmd)
+
+	// Resolve SNC/SSO configuration from SAP UI Landscape file
+	if cfg.SNC {
+		if cfg.SysID == "" {
+			return fmt.Errorf("--sysid is required when --snc is specified")
+		}
+		if cfg.Verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] SNC mode: resolving system %q from SAP UI Landscape\n", cfg.SysID)
+			if cfg.LandscapeFile != "" {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Using landscape file: %s\n", cfg.LandscapeFile)
+			}
+		}
+		jcoProps, err := adt.ResolveSNCJcoProperties(cfg.SysID, cfg.LandscapeFile, cfg.Client, cfg.Language)
+		if err != nil {
+			return fmt.Errorf("SNC configuration failed: %w", err)
+		}
+		cfg.JcoProperties = jcoProps
+		cfg.ConnectionMode = "rfc" // SNC requires RFC mode via JCo sidecar
+		if cfg.Verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] SNC: resolved %d JCo properties for system %q\n", len(jcoProps), cfg.SysID)
+			for k, v := range jcoProps {
+				if k == "jco.client.snc_partnername" {
+					fmt.Fprintf(os.Stderr, "[VERBOSE]   %s = %s\n", k, v)
+				} else {
+					fmt.Fprintf(os.Stderr, "[VERBOSE]   %s = %s\n", k, v)
+				}
+			}
+		}
+	}
 
 	// Validate configuration
 	if err := validateConfig(); err != nil {
@@ -217,7 +256,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 		}
 		if strings.EqualFold(cfg.ConnectionMode, "rfc") {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Connection: RFC mode\n")
-			if cfg.AsHost != "" {
+			if cfg.SNC {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Auth: SNC/SSO (system ID: %s, %d JCo properties)\n", cfg.SysID, len(cfg.JcoProperties))
+			} else if cfg.AsHost != "" {
 				fmt.Fprintf(os.Stderr, "[VERBOSE] RFC: Direct connection to %s (sysnr: %s)\n", cfg.AsHost, cfg.SysNr)
 			} else if cfg.MsHost != "" {
 				fmt.Fprintf(os.Stderr, "[VERBOSE] RFC: Load balanced via %s (r3name: %s, group: %s)\n", cfg.MsHost, cfg.R3Name, cfg.Group)
@@ -231,6 +272,8 @@ func runServer(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] SAP Language: %s\n", cfg.Language)
 		if cfg.Username != "" {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Auth: Basic (user: %s)\n", cfg.Username)
+		} else if cfg.SNC {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Auth: SNC/SSO\n")
 		} else if len(cfg.Cookies) > 0 {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Auth: Cookie (%d cookies)\n", len(cfg.Cookies))
 		}
@@ -582,31 +625,54 @@ func resolveConfig(cmd *cobra.Command) {
 			cfg.RfcMaxConcurrent = v
 		}
 	}
+
+	// SNC/SSO settings: flag > SAP_* env
+	if !cmd.Flags().Changed("snc") {
+		cfg.SNC = viper.GetBool("SNC")
+	}
+	if !cmd.Flags().Changed("sysid") && cfg.SysID == "" {
+		if v := viper.GetString("SYSID"); v != "" {
+			cfg.SysID = v
+		}
+	}
+	if !cmd.Flags().Changed("landscape-file") && cfg.LandscapeFile == "" {
+		if v := viper.GetString("LANDSCAPE_FILE"); v != "" {
+			cfg.LandscapeFile = v
+		}
+	}
 }
 
 func validateConfig() error {
 	// In RFC mode, URL is not required; RFC connection params are
 	if strings.EqualFold(cfg.ConnectionMode, "rfc") {
-		hasDirect := cfg.AsHost != ""
-		hasLB := cfg.MsHost != ""
-		if !hasDirect && !hasLB {
-			return fmt.Errorf("RFC mode requires --ashost or --mshost")
-		}
-		if hasDirect && hasLB {
-			return fmt.Errorf("cannot specify both --ashost (direct) and --mshost (load balancing)")
-		}
-		if hasDirect && cfg.SysNr == "" {
-			return fmt.Errorf("--sysnr required for direct RFC connection")
-		}
-		if hasLB {
-			if cfg.MsServ == "" {
-				return fmt.Errorf("--msserv required for RFC load balancing")
+		if cfg.SNC {
+			// SNC mode: connection params come from JcoProperties (resolved from landscape)
+			if len(cfg.JcoProperties) == 0 {
+				return fmt.Errorf("SNC mode enabled but no JCo properties resolved from landscape")
 			}
-			if cfg.R3Name == "" {
-				return fmt.Errorf("--r3name required for RFC load balancing")
+		} else {
+			// Standard RFC mode: need explicit connection params
+			hasDirect := cfg.AsHost != ""
+			hasLB := cfg.MsHost != ""
+			if !hasDirect && !hasLB {
+				return fmt.Errorf("RFC mode requires --ashost or --mshost")
 			}
-			if cfg.Group == "" {
-				return fmt.Errorf("--group required for RFC load balancing")
+			if hasDirect && hasLB {
+				return fmt.Errorf("cannot specify both --ashost (direct) and --mshost (load balancing)")
+			}
+			if hasDirect && cfg.SysNr == "" {
+				return fmt.Errorf("--sysnr required for direct RFC connection")
+			}
+			if hasLB {
+				if cfg.MsServ == "" {
+					return fmt.Errorf("--msserv required for RFC load balancing")
+				}
+				if cfg.R3Name == "" {
+					return fmt.Errorf("--r3name required for RFC load balancing")
+				}
+				if cfg.Group == "" {
+					return fmt.Errorf("--group required for RFC load balancing")
+				}
 			}
 		}
 	} else {
@@ -649,13 +715,16 @@ func processCookieAuth(cmd *cobra.Command) error {
 	if cookieString != "" {
 		authMethods++
 	}
+	if cfg.SNC {
+		authMethods++ // SNC uses OS-level SSO (Kerberos/SPNEGO), no user/password needed
+	}
 
 	if authMethods > 1 {
-		return fmt.Errorf("only one authentication method can be used at a time (basic auth, cookie-file, or cookie-string)")
+		return fmt.Errorf("only one authentication method can be used at a time (basic auth, cookie-file, cookie-string, or SNC)")
 	}
 
 	if authMethods == 0 {
-		return fmt.Errorf("authentication required. Use --user/--password, --cookie-file, or --cookie-string")
+		return fmt.Errorf("authentication required. Use --user/--password, --cookie-file, --cookie-string, or --snc/--sysid")
 	}
 
 	// Process cookie file
