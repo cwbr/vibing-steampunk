@@ -133,6 +133,7 @@ func init() {
 	rootCmd.Flags().StringVar(&cfg.JavaPath, "java-path", "java", "Path to Java binary")
 	rootCmd.Flags().IntVar(&cfg.RfcProxyPort, "rfc-proxy-port", 0, "Fixed sidecar port (0=auto)")
 	rootCmd.Flags().IntVar(&cfg.RfcMaxConcurrent, "rfc-max-concurrent", 5, "Max concurrent RFC calls")
+	rootCmd.Flags().StringVar(&cfg.SidecarTransport, "jco-sidecar-transport", "http", "Sidecar transport: http (default) or stdio")
 
 	// SNC/SSO configuration (via SAP UI Landscape)
 	rootCmd.Flags().BoolVar(&cfg.SNC, "snc", false, "Enable SNC single sign-on via JCo (requires --sysid)")
@@ -188,6 +189,7 @@ func init() {
 	viper.BindPFlag("java-path", rootCmd.Flags().Lookup("java-path"))
 	viper.BindPFlag("rfc-proxy-port", rootCmd.Flags().Lookup("rfc-proxy-port"))
 	viper.BindPFlag("rfc-max-concurrent", rootCmd.Flags().Lookup("rfc-max-concurrent"))
+	viper.BindPFlag("jco-sidecar-transport", rootCmd.Flags().Lookup("jco-sidecar-transport"))
 
 	// SNC/SSO configuration
 	viper.BindPFlag("snc", rootCmd.Flags().Lookup("snc"))
@@ -255,7 +257,11 @@ func runServer(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Disabled groups: %s (5/U=UI5, T=Tests, H=HANA, D=Debug)\n", cfg.DisabledGroups)
 		}
 		if strings.EqualFold(cfg.ConnectionMode, "rfc") {
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Connection: RFC mode\n")
+			transport := cfg.SidecarTransport
+			if transport == "" {
+				transport = "http"
+			}
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Connection: RFC mode (sidecar transport: %s)\n", transport)
 			if cfg.SNC {
 				fmt.Fprintf(os.Stderr, "[VERBOSE] Auth: SNC/SSO (system ID: %s, %d JCo properties)\n", cfg.SysID, len(cfg.JcoProperties))
 			} else if cfg.AsHost != "" {
@@ -623,6 +629,11 @@ func resolveConfig(cmd *cobra.Command) {
 	if !cmd.Flags().Changed("rfc-max-concurrent") && cfg.RfcMaxConcurrent == 0 {
 		if v := viper.GetInt("RFC_MAX_CONCURRENT"); v != 0 {
 			cfg.RfcMaxConcurrent = v
+		}
+	}
+	if !cmd.Flags().Changed("jco-sidecar-transport") {
+		if v := viper.GetString("JCO_SIDECAR_TRANSPORT"); v != "" {
+			cfg.SidecarTransport = v
 		}
 	}
 

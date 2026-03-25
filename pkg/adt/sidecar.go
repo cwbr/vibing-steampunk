@@ -24,6 +24,7 @@ type SidecarConfig struct {
 	JavaPath      string // Java binary path (default: "java")
 	Port          int    // Fixed port (0 = auto-assign)
 	MaxConcurrent int    // Max concurrent RFC requests (default: 5)
+	Transport     string // Transport mode: "http" (default) or "stdio"
 
 	// SAP connection parameters forwarded to the Java sidecar
 	AsHost   string // Application server host (direct connection)
@@ -71,6 +72,11 @@ type SidecarManager struct {
 	actualPort int
 	mu         sync.Mutex
 	httpClient *http.Client
+
+	// STDIO transport pipes (only used when Transport == "stdio")
+	stdin   io.WriteCloser
+	stdout  *bufio.Reader
+	stdioMu sync.Mutex // serializes STDIO request/response pairs
 }
 
 // NewSidecarManager creates a new SidecarManager with the given configuration.
@@ -116,6 +122,14 @@ func (s *SidecarManager) Start(ctx context.Context) error {
 		fmt.Sprintf("DYLD_LIBRARY_PATH=%s", s.config.JcoLibsDir),
 	)
 
+	if s.IsSTDIO() {
+		return s.startSTDIO(ctx, cmd)
+	}
+	return s.startHTTP(ctx, cmd)
+}
+
+// startHTTP launches the sidecar in HTTP mode and waits for SIDECAR_PORT.
+func (s *SidecarManager) startHTTP(ctx context.Context, cmd *exec.Cmd) error {
 	// Capture stdout to read port
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -135,19 +149,85 @@ func (s *SidecarManager) Start(ctx context.Context) error {
 	// Wait for SIDECAR_PORT line from stdout
 	port, err := s.waitForPort(ctx, stdout)
 	if err != nil {
-		// Kill the process if we can't get the port
 		s.process.Kill()
 		s.process = nil
 		s.cmd = nil
-		// Include stderr output in error for better diagnostics
 		if errMsg := extractSidecarError(stderrBuf.String()); errMsg != "" {
 			return fmt.Errorf("waiting for sidecar port: %s", errMsg)
 		}
 		return fmt.Errorf("waiting for sidecar port: %w", err)
 	}
 	s.actualPort = port
-
 	return nil
+}
+
+// startSTDIO launches the sidecar in STDIO mode and waits for SIDECAR_READY.
+func (s *SidecarManager) startSTDIO(ctx context.Context, cmd *exec.Cmd) error {
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("creating stdin pipe: %w", err)
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("creating stdout pipe: %w", err)
+	}
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting sidecar: %w", err)
+	}
+
+	s.cmd = cmd
+	s.process = cmd.Process
+	s.stdin = stdinPipe
+	s.stdout = bufio.NewReader(stdoutPipe)
+
+	// Wait for SIDECAR_READY line
+	err = s.waitForReady(ctx)
+	if err != nil {
+		s.process.Kill()
+		s.stdin = nil
+		s.stdout = nil
+		s.process = nil
+		s.cmd = nil
+		if errMsg := extractSidecarError(stderrBuf.String()); errMsg != "" {
+			return fmt.Errorf("waiting for sidecar ready: %s", errMsg)
+		}
+		return fmt.Errorf("waiting for sidecar ready: %w", err)
+	}
+	return nil
+}
+
+// waitForReady reads stdout until it finds "SIDECAR_READY".
+func (s *SidecarManager) waitForReady(ctx context.Context) error {
+	readyCh := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
+
+	go func() {
+		for {
+			line, err := s.stdout.ReadString('\n')
+			if err != nil {
+				errCh <- fmt.Errorf("reading sidecar stdout: %w", err)
+				return
+			}
+			if strings.TrimSpace(line) == "SIDECAR_READY" {
+				readyCh <- struct{}{}
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-readyCh:
+		return nil
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("timeout waiting for sidecar ready: %w", ctx.Err())
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("timeout waiting for sidecar to start (30s)")
+	}
 }
 
 // Stop gracefully shuts down the sidecar process.
@@ -158,6 +238,13 @@ func (s *SidecarManager) Stop() error {
 	if s.process == nil {
 		return nil
 	}
+
+	// Close STDIO pipes first (signals EOF to the sidecar)
+	if s.stdin != nil {
+		s.stdin.Close()
+		s.stdin = nil
+	}
+	s.stdout = nil
 
 	// Send SIGTERM
 	if err := s.process.Signal(os.Interrupt); err != nil {
@@ -215,6 +302,51 @@ func (s *SidecarManager) IsRunning() bool {
 	// On Unix, sending signal 0 checks if process exists without actually signaling it
 	err := s.process.Signal(os.Signal(nil))
 	return err == nil
+}
+
+// IsSTDIO returns true if the sidecar is configured for STDIO transport.
+func (s *SidecarManager) IsSTDIO() bool {
+	return strings.EqualFold(s.config.Transport, "stdio")
+}
+
+// SendSTDIO sends a JSON message to the sidecar via stdin and reads the response from stdout.
+// The caller must provide a unique id to correlate the response. This is thread-safe.
+func (s *SidecarManager) SendSTDIO(msg map[string]interface{}) (map[string]interface{}, error) {
+	s.stdioMu.Lock()
+	defer s.stdioMu.Unlock()
+
+	if s.stdin == nil || s.stdout == nil {
+		return nil, fmt.Errorf("STDIO transport not initialized")
+	}
+
+	// Write request as a single JSON line
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling STDIO request: %w", err)
+	}
+	data = append(data, '\n')
+
+	if _, err := s.stdin.Write(data); err != nil {
+		return nil, fmt.Errorf("writing to sidecar stdin: %w", err)
+	}
+
+	// Read response line
+	line, err := s.stdout.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("reading from sidecar stdout: %w", err)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		return nil, fmt.Errorf("parsing sidecar STDIO response: %w", err)
+	}
+
+	// Check for error field
+	if errMsg, ok := resp["error"]; ok && errMsg != nil {
+		return nil, fmt.Errorf("sidecar error: %v", errMsg)
+	}
+
+	return resp, nil
 }
 
 // HealthCheck performs a health check against the sidecar's /health endpoint.
@@ -335,8 +467,13 @@ func (s *SidecarManager) buildArgs(classpath string) []string {
 		"com.sap.mcp.proxy.RfcProxyServer",
 	}
 
-	// Sidecar server port (always passed as named arg, not a JCo property)
-	if s.config.Port > 0 {
+	// STDIO transport flag
+	if s.IsSTDIO() {
+		args = append(args, "--stdio")
+	}
+
+	// Sidecar server port (HTTP mode only, not a JCo property)
+	if !s.IsSTDIO() && s.config.Port > 0 {
 		args = append(args, "--port", strconv.Itoa(s.config.Port))
 	}
 

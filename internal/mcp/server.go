@@ -112,6 +112,9 @@ type Config struct {
 	LandscapeFile string            // Explicit path to SAP UI Landscape XML
 	JcoProperties map[string]string // Resolved JCo properties (populated during config resolution)
 
+	// Sidecar transport mode: \"http\" (default) or \"stdio\"
+	SidecarTransport string
+
 	// Granular tool visibility (from .vsp.json)
 	// Key: tool name, Value: true=enabled, false=disabled
 	// Takes highest priority over mode and disabled groups
@@ -200,6 +203,7 @@ func NewServer(cfg *Config) *Server {
 			JavaPath:      cfg.JavaPath,
 			Port:          cfg.RfcProxyPort,
 			MaxConcurrent: cfg.RfcMaxConcurrent,
+			Transport:     cfg.SidecarTransport,
 			AsHost:        cfg.AsHost,
 			SysNr:         cfg.SysNr,
 			MsHost:        cfg.MsHost,
@@ -224,8 +228,14 @@ func NewServer(cfg *Config) *Server {
 		if maxConcurrent <= 0 {
 			maxConcurrent = 5
 		}
-		rfcTransport := adt.NewRfcTransport(sidecar.URL(), adtCfg, maxConcurrent)
-		adtClient = adt.NewClientWithTransport(adtCfg, rfcTransport)
+
+		if sidecar.IsSTDIO() {
+			stdioTransport := adt.NewStdioRfcTransport(sidecar, adtCfg, maxConcurrent)
+			adtClient = adt.NewClientWithTransport(adtCfg, stdioTransport)
+		} else {
+			rfcTransport := adt.NewRfcTransport(sidecar.URL(), adtCfg, maxConcurrent)
+			adtClient = adt.NewClientWithTransport(adtCfg, rfcTransport)
+		}
 	} else {
 		// HTTP mode (default)
 		adtClient = adt.NewClient(cfg.BaseURL, cfg.Username, cfg.Password, opts...)
