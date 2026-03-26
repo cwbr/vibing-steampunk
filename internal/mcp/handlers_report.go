@@ -13,6 +13,28 @@ import (
 	"github.com/oisee/vibing-steampunk/pkg/adt"
 )
 
+// routeReportAction routes "debug" with report-related sub-actions.
+func (s *Server) routeReportAction(ctx context.Context, action, objectType, objectName string, params map[string]any) (*mcp.CallToolResult, bool, error) {
+	if action != "debug" {
+		return nil, false, nil
+	}
+	switch objectType {
+	case "RUN_REPORT":
+		return s.callHandler(ctx, s.handleRunReport, params)
+	case "RUN_REPORT_ASYNC":
+		return s.callHandler(ctx, s.handleRunReportAsync, params)
+	case "GET_ASYNC_RESULT":
+		return s.callHandler(ctx, s.handleGetAsyncResult, params)
+	case "GET_VARIANTS":
+		return s.callHandler(ctx, s.handleGetVariants, params)
+	case "GET_TEXT_ELEMENTS":
+		return s.callHandler(ctx, s.handleGetTextElements, params)
+	case "SET_TEXT_ELEMENTS":
+		return s.callHandler(ctx, s.handleSetTextElements, params)
+	}
+	return nil, false, nil
+}
+
 // --- Report Execution Handlers ---
 
 // rfcModeWSUnavailable returns an error for WebSocket-based tools in RFC mode.

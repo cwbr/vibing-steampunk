@@ -35,7 +35,7 @@ Two modes of operation:
 
   MCP Server (default)  Connects Claude, Gemini CLI, Copilot, Codex, Qwen Code,
                         and other MCP-compatible agents to SAP systems.
-                        81 tools in focused mode, 122 in expert mode.
+                        81 tools (focused), 122 (expert), or 1 universal tool (hyperfocused).
 
   CLI Mode              Direct terminal access: search, source, export, debug.
                         Multi-system profiles. Useful for scripts and pipelines.
@@ -105,7 +105,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&cfg.AllowTransportableEdits, "allow-transportable-edits", false, "Allow editing objects in transportable packages (requires transport parameter)")
 
 	// Mode options
-	rootCmd.Flags().StringVar(&cfg.Mode, "mode", "focused", "Tool mode: focused (81 essential tools) or expert (all 122 tools)")
+	rootCmd.Flags().StringVar(&cfg.Mode, "mode", "focused", "Tool mode: focused (81 tools), expert (122 tools), or hyperfocused (single universal SAP tool)")
 	rootCmd.Flags().StringVar(&cfg.DisabledGroups, "disabled-groups", "", "Disable tool groups: 5/U=UI5, T=Tests, H=HANA, D=Debug (e.g., \"TH\" disables Tests and HANA)")
 
 	// Feature configuration (safety network)
@@ -694,8 +694,8 @@ func validateConfig() error {
 	}
 
 	// Validate mode
-	if cfg.Mode != "focused" && cfg.Mode != "expert" {
-		return fmt.Errorf("invalid mode: %s (must be 'focused' or 'expert')", cfg.Mode)
+	if cfg.Mode != "focused" && cfg.Mode != "expert" && cfg.Mode != "hyperfocused" {
+		return fmt.Errorf("invalid mode: %s (must be 'focused', 'expert', or 'hyperfocused')", cfg.Mode)
 	}
 
 	// Check if we have either basic auth or cookies will be processed
@@ -730,11 +730,14 @@ func processCookieAuth(cmd *cobra.Command) error {
 		authMethods++ // SNC uses OS-level SSO (Kerberos/SPNEGO), no user/password needed
 	}
 
+	// In RFC mode, SSO is valid — no password or cookies needed
+	isRFC := strings.EqualFold(cfg.ConnectionMode, "rfc")
+
 	if authMethods > 1 {
 		return fmt.Errorf("only one authentication method can be used at a time (basic auth, cookie-file, cookie-string, or SNC)")
 	}
 
-	if authMethods == 0 {
+	if authMethods == 0 && !isRFC {
 		return fmt.Errorf("authentication required. Use --user/--password, --cookie-file, --cookie-string, or --snc/--sysid")
 	}
 
