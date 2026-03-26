@@ -18,7 +18,7 @@ func toolGroups() map[string][]string {
 		},
 		"D": { // ABAP debugger (session tools - breakpoints via WebSocket ZADT_VSP)
 			"DebuggerListen", "DebuggerAttach", "DebuggerDetach",
-			"DebuggerStep", "DebuggerGetStack", "DebuggerGetVariables",
+			"DebuggerStep", "DebuggerGetStack", "DebuggerGetVariables", "DebuggerSetVariable",
 		},
 		"C": { // CTS/Transport tools
 			"ListTransports", "GetTransport",
@@ -41,7 +41,7 @@ func toolGroups() map[string][]string {
 			// ABAP Debugger - requires ZADT_VSP WebSocket handler
 			"SetBreakpoint", "GetBreakpoints", "DeleteBreakpoint",
 			"DebuggerListen", "DebuggerAttach", "DebuggerDetach",
-			"DebuggerStep", "DebuggerGetStack", "DebuggerGetVariables",
+			"DebuggerStep", "DebuggerGetStack", "DebuggerGetVariables", "DebuggerSetVariable",
 			// AMDP/HANA Debugger - experimental, session management issues
 			"AMDPDebuggerStart", "AMDPDebuggerResume", "AMDPDebuggerStop",
 			"AMDPDebuggerStep", "AMDPGetVariables", "AMDPSetBreakpoint", "AMDPGetBreakpoints",

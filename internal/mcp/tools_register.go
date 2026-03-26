@@ -651,6 +651,20 @@ func (s *Server) registerDebuggerTools(shouldRegister func(string) bool) {
 			),
 		), s.handleDebuggerGetVariables)
 	}
+
+	if shouldRegister("DebuggerSetVariable") {
+		s.mcpServer.AddTool(mcp.NewTool("DebuggerSetVariable",
+			mcp.WithDescription("Set a variable value during a debug session. Requires an active debug session (after DebuggerAttach)."),
+			mcp.WithString("variable_name",
+				mcp.Required(),
+				mcp.Description("Variable name (e.g., 'GV_SPEED', 'LV_COUNT', 'LS_DATA-FIELD')"),
+			),
+			mcp.WithString("value",
+				mcp.Required(),
+				mcp.Description("New value as string (e.g., '70', 'Hello', 'X')"),
+			),
+		), s.handleDebuggerSetVariable)
+	}
 }
 
 // registerSearchTools registers object search tools.

@@ -34,16 +34,16 @@ func focusedToolSet() map[string]bool {
 		// Development tools (11)
 		"SyntaxCheck":        true,
 		"RunUnitTests":       true,
-		"RunATCCheck":        true,  // Code quality checks
-		"Activate":           true,  // Re-activate objects without editing
-		"ActivatePackage":    true,  // Batch activation of all inactive objects
-		"PrettyPrint":        true,  // Format ABAP code
-		"GetInactiveObjects": true,  // List pending activations
-		"CreatePackage":      true,  // Create local packages ($...)
-		"CreateTable":        true,  // Create DDIC tables from JSON
-		"CompareSource":      true,  // Diff two objects
-		"CloneObject":        true,  // Copy object to new name
-		"GetClassInfo":       true,  // Quick class metadata
+		"RunATCCheck":        true, // Code quality checks
+		"Activate":           true, // Re-activate objects without editing
+		"ActivatePackage":    true, // Batch activation of all inactive objects
+		"PrettyPrint":        true, // Format ABAP code
+		"GetInactiveObjects": true, // List pending activations
+		"CreatePackage":      true, // Create local packages ($...)
+		"CreateTable":        true, // Create DDIC tables from JSON
+		"CompareSource":      true, // Diff two objects
+		"CloneObject":        true, // Copy object to new name
+		"GetClassInfo":       true, // Quick class metadata
 
 		// Advanced/Edge cases (2)
 		"LockObject":   true,
@@ -93,6 +93,7 @@ func focusedToolSet() map[string]bool {
 		"DebuggerStep":         true, // Step through code
 		"DebuggerGetStack":     true, // Get call stack
 		"DebuggerGetVariables": true, // Get variable values
+		"DebuggerSetVariable":  true, // Set variable value
 
 		// UI5/Fiori BSP Management (3 read-only - ADT filestore is read-only)
 		"UI5ListApps":       true, // List UI5 applications
@@ -117,10 +118,10 @@ func focusedToolSet() map[string]bool {
 		"GitExport": true, // Export packages/objects to abapGit ZIP
 
 		// Report Execution (via ZADT_VSP WebSocket)
-		"RunReport":      true, // Execute reports with params/variants, capture ALV
-		"RunReportAsync": true, // Background report execution with polling
-		"GetAsyncResult": true, // Retrieve async task results
-		"GetVariants":    true, // List report variants
+		"RunReport":       true, // Execute reports with params/variants, capture ALV
+		"RunReportAsync":  true, // Background report execution with polling
+		"GetAsyncResult":  true, // Retrieve async task results
+		"GetVariants":     true, // List report variants
 		"GetTextElements": true, // Get program text elements
 		"SetTextElements": true, // Set program text elements
 

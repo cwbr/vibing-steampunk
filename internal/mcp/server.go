@@ -1,4 +1,4 @@
-// Package mcp provides the MCP server implementation for ABAP ADT tools.
+﻿// Package mcp provides the MCP server implementation for ABAP ADT tools.
 package mcp
 
 import (
@@ -9,18 +9,19 @@ import (
 	"sync"
 	"time"
 
+	"path/filepath"
+
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	deps "github.com/oisee/vibing-steampunk/embedded/deps"
 	"github.com/oisee/vibing-steampunk/pkg/adt"
-	"path/filepath"
 )
 
 // AsyncTask represents a background task status.
 type AsyncTask struct {
 	ID        string      `json:"id"`
-	Type      string      `json:"type"`       // "report", "export", etc.
-	Status    string      `json:"status"`     // "running", "completed", "error"
+	Type      string      `json:"type"`   // "report", "export", etc.
+	Status    string      `json:"status"` // "running", "completed", "error"
 	StartedAt time.Time   `json:"started_at"`
 	EndedAt   *time.Time  `json:"ended_at,omitempty"`
 	Result    interface{} `json:"result,omitempty"`
@@ -29,14 +30,14 @@ type AsyncTask struct {
 
 // Server wraps the MCP server with ADT client.
 type Server struct {
-	mcpServer      *server.MCPServer
-	adtClient      *adt.Client
-	amdpWSClient   *adt.AMDPWebSocketClient   // WebSocket-based AMDP client (ZADT_VSP)
-	debugWSClient  *adt.DebugWebSocketClient  // WebSocket-based debug client (ZADT_VSP)
-	config         *Config                    // Server configuration for session manager creation
-	featureProber  *adt.FeatureProber         // Feature detection system (safety network)
-	featureConfig  adt.FeatureConfig          // Feature configuration
-	sidecar        *adt.SidecarManager        // JCo sidecar (RFC mode only)
+	mcpServer     *server.MCPServer
+	adtClient     *adt.Client
+	amdpWSClient  *adt.AMDPWebSocketClient  // WebSocket-based AMDP client (ZADT_VSP)
+	debugWSClient *adt.DebugWebSocketClient // WebSocket-based debug client (ZADT_VSP)
+	config        *Config                   // Server configuration for session manager creation
+	featureProber *adt.FeatureProber        // Feature detection system (safety network)
+	featureConfig adt.FeatureConfig         // Feature configuration
+	sidecar       *adt.SidecarManager       // JCo sidecar (RFC mode only)
 
 	// Async task management
 	asyncTasks   map[string]*AsyncTask
@@ -69,11 +70,11 @@ type Config struct {
 	DisabledGroups string
 
 	// Safety configuration
-	ReadOnly         bool
-	BlockFreeSQL     bool
-	AllowedOps       string
-	DisallowedOps    string
-	AllowedPackages  []string
+	ReadOnly                bool
+	BlockFreeSQL            bool
+	AllowedOps              string
+	DisallowedOps           string
+	AllowedPackages         []string
 	EnableTransports        bool     // Explicitly enable transport management (default: disabled)
 	TransportReadOnly       bool     // Only allow read operations on transports (list, get)
 	AllowedTransports       []string // Whitelist specific transports (supports wildcards like "A4HK*")
@@ -104,6 +105,15 @@ type Config struct {
 	JavaPath         string
 	RfcProxyPort     int
 	RfcMaxConcurrent int
+
+	// SNC/SSO configuration (via SAP UI Landscape)
+	SNC           bool              // Enable SNC single sign-on
+	SysID         string            // SAP System ID from landscape (3 chars)
+	LandscapeFile string            // Explicit path to SAP UI Landscape XML
+	JcoProperties map[string]string // Resolved JCo properties (populated during config resolution)
+
+	// Sidecar transport mode: \"http\" (default) or \"stdio\"
+	SidecarTransport string
 
 	// Granular tool visibility (from .vsp.json)
 	// Key: tool name, Value: true=enabled, false=disabled
@@ -159,7 +169,7 @@ func NewServer(cfg *Config) *Server {
 	}
 	opts = append(opts, adt.WithSafety(safety))
 
-	// Create ADT client — HTTP or RFC mode
+	// Create ADT client â€” HTTP or RFC mode
 	var adtClient *adt.Client
 	var sidecar *adt.SidecarManager
 
@@ -193,6 +203,7 @@ func NewServer(cfg *Config) *Server {
 			JavaPath:      cfg.JavaPath,
 			Port:          cfg.RfcProxyPort,
 			MaxConcurrent: cfg.RfcMaxConcurrent,
+			Transport:     cfg.SidecarTransport,
 			AsHost:        cfg.AsHost,
 			SysNr:         cfg.SysNr,
 			MsHost:        cfg.MsHost,
@@ -202,7 +213,8 @@ func NewServer(cfg *Config) *Server {
 			Client:        cfg.Client,
 			Username:      cfg.Username,
 			Password:      cfg.Password,
-			Language:       cfg.Language,
+			Language:      cfg.Language,
+			JcoProperties: cfg.JcoProperties,
 		}
 		sidecar = adt.NewSidecarManager(sidecarCfg)
 
@@ -216,8 +228,14 @@ func NewServer(cfg *Config) *Server {
 		if maxConcurrent <= 0 {
 			maxConcurrent = 5
 		}
-		rfcTransport := adt.NewRfcTransport(sidecar.URL(), adtCfg, maxConcurrent)
-		adtClient = adt.NewClientWithTransport(adtCfg, rfcTransport)
+
+		if sidecar.IsSTDIO() {
+			stdioTransport := adt.NewStdioRfcTransport(sidecar, adtCfg, maxConcurrent)
+			adtClient = adt.NewClientWithTransport(adtCfg, stdioTransport)
+		} else {
+			rfcTransport := adt.NewRfcTransport(sidecar.URL(), adtCfg, maxConcurrent)
+			adtClient = adt.NewClientWithTransport(adtCfg, rfcTransport)
+		}
 	} else {
 		// HTTP mode (default)
 		adtClient = adt.NewClient(cfg.BaseURL, cfg.Username, cfg.Password, opts...)
@@ -301,6 +319,8 @@ func parseFeatureMode(s string) adt.FeatureMode {
 func (s *Server) ServeStdio() error {
 	return server.ServeStdio(s.mcpServer)
 }
+
+// registerTools is now in tools_register.go (decomposed)
 
 // newToolResultError creates an error result for tool execution failures.
 func newToolResultError(message string) *mcp.CallToolResult {
